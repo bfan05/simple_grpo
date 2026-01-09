@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 import torch
 from datasets import Dataset
