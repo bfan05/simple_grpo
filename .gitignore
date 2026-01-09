@@ -1,23 +1,102 @@
-# Python
+# ============================
+# Python / Conda
+# ============================
 __pycache__/
-*.pyc
-.venv/
-venv/
-*.egg-info/
+*.py[cod]
+*.pyo
+*.pyd
 
-# HF / datasets / caches
+# Conda / virtual envs
+.env
+.venv
+venv/
+conda/
+miniconda*/
+anaconda*/
+
+# ============================
+# Hugging Face / ML caches
+# ============================
 .cache/
 .huggingface/
-datasets/
-wandb/
-runs/
+hf_cache/
+transformers_cache/
+datasets_cache/
 
-# Outputs
-grpo-out/
+# If HF_HOME is redirected
+hf/
+hf_data/
+hf_datasets/
+
+# Torch cache
+torch_cache/
+torch/
+
+# ============================
+# Training outputs
+# ============================
+outputs/
 checkpoints/
+runs/
+logs/
+
+# TRL / Accelerate artifacts
+accelerate_config.yaml
+default_config.yaml
+
+# ============================
+# Weights & Biases
+# ============================
+wandb/
+wandb_logs/
+
+# ============================
+# Evaluation artifacts
+# ============================
+*.jsonl
+*.json
 *.pt
-*.bin
+*.pth
+*.ckpt
 *.safetensors
 
-# OS
+# ============================
+# Jupyter / notebooks
+# ============================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================
+# macOS
+# ============================
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# ============================
+# Linux
+# ============================
+*~
+.nfs*
+
+# ============================
+# VS Code / Cursor
+# ============================
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ============================
+# AWS / SSH
+# ============================
+*.pem
+*.key
+*.log
+
+# ============================
+# Misc
+# ============================
+tmp/
+temp/
+debug/

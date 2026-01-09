@@ -1,0 +1,13 @@
+torch
+transformers
+datasets
+accelerate
+trl
+peft
+sentencepiece
+wandb
+evaluate
+numpy
+scipy
+packaging
+rich
