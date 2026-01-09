@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# HF / datasets / caches
+.cache/
+.huggingface/
+datasets/
+wandb/
+runs/
+
+# Outputs
+grpo-out/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+
+# OS
+.DS_Store
