@@ -1,6 +1,6 @@
 ## simple_grpo
 
-**simple_grpo** is a minimal, end-to-end reinforcement learning (RL) training stack for LLM **reasoning** built on top of Hugging Face TRL’s `GRPOTrainer`. It is intentionally small and opinionated, aimed at helping you understand the full RL pipeline rather than serving as a production system.
+**simple_grpo** is a minimal, end-to-end reinforcement learning (RL) training stack for LLM **reasoning** built on top of Hugging Face TRL’s `GRPOTrainer`. It is intentionally small and opinionated, with the goal of being used to understand the full RL pipeline rather than serving as a production system.
 
 The current setup focuses on **GSM8K** math word problems and walks through:
 

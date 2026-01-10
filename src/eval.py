@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 import torch
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from tqdm.auto import tqdm
 
 from .rewards import extract_model_final
 
@@ -29,7 +30,7 @@ def evaluate(
 
     rows: List[Dict[str, Any]] = []
 
-    for ex in dataset:
+    for ex in tqdm(dataset, desc="Evaluating", leave=True):
         prompt = ex["prompt"]
         gt = ex.get("answer_final")
 
@@ -47,7 +48,8 @@ def evaluate(
 
         # decode only the generated continuation
         gen_text = tokenizer.decode(gen[0], skip_special_tokens=True)
-        completion = gen_text[len(tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)) :]
+        prompt_text = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
+        completion = gen_text[len(prompt_text):]
 
         pred = extract_model_final(completion)
 
@@ -72,4 +74,7 @@ def evaluate(
             for r in rows:
                 f.write(json.dumps(r) + "\n")
 
-    return {"eval_accuracy": acc, "eval_avg_new_tokens": avg_len}
+    return {
+        "eval_accuracy": acc,
+        "eval_avg_new_tokens": avg_len,
+    }
