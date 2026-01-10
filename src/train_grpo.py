@@ -10,6 +10,8 @@ from trl import GRPOTrainer, GRPOConfig
 
 from src.rewards import extract_gsm8k_gt, make_reward_fn
 from src.eval import evaluate
+from src.rollout_logger import RolloutRecorder, StepTrackerCallback
+from src.rewards_logged import make_logged_reward_fn
 
 import argparse
 import yaml
@@ -83,6 +85,7 @@ def main():
 
     cfg = load_yaml_config(args.config) if args.config else {}
     train_cfg = cfg.get("train", {}) or {}
+    dataset_cfg = cfg.get("dataset", {}) or {}
     runtime_cfg = cfg.get("runtime", {}) or {}
 
     model_name = os.environ.get("MODEL_NAME", cfg.get("model_name", "Qwen/Qwen2.5-0.5B-Instruct"))
@@ -100,8 +103,8 @@ def main():
     logging_steps = int(train_cfg.get("logging_steps", 1))
     save_steps = int(train_cfg.get("save_steps", 0))
 
-    n_train = int(os.environ.get("N_TRAIN", cfg.get("n_train", 128)))
-    n_eval = int(os.environ.get("N_EVAL", cfg.get("n_eval", 64)))
+    n_train = int(os.environ.get("N_TRAIN", dataset_cfg.get("n_train", 128)))
+    n_eval = int(os.environ.get("N_EVAL", dataset_cfg.get("n_eval", 64)))
 
     # Runtime toggles from YAML
     use_wandb = bool(runtime_cfg.get("use_wandb", False))
@@ -139,7 +142,11 @@ def main():
     eval_ds = load_gsm8k_eval(tokenizer=tokenizer, n=n_eval)
 
     prompt_to_gt = {ex["prompt"]: ex["answer_final"] for ex in train_ds}
-    reward_fn = make_reward_fn(prompt_to_gt)
+    
+    rollout_dir = os.path.join(output_dir, "rollouts")
+    recorder = RolloutRecorder(out_dir=rollout_dir)
+
+    reward_fn = make_logged_reward_fn(prompt_to_gt, recorder)
 
     grpo_args = GRPOConfig(
         output_dir=output_dir,
@@ -167,10 +174,12 @@ def main():
         reward_funcs=reward_fn,
     )
 
+    trainer.add_callback(StepTrackerCallback(recorder))
+
     # run a quick eval before training
-    pre = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-                   out_path=os.path.join(output_dir, "eval_samples_before.jsonl"))
-    print("[eval before]", pre)
+    # pre = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
+    #                out_path=os.path.join(output_dir, "eval_samples_before.jsonl"))
+    # print("[eval before]", pre)
 
     trainer.train()
 
@@ -178,9 +187,9 @@ def main():
     trainer.save_model(output_dir)
 
     # eval after training
-    post = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-                    out_path=os.path.join(output_dir, "eval_samples_after.jsonl"))
-    print("[eval after]", post)
+    # post = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
+    #                 out_path=os.path.join(output_dir, "eval_samples_after.jsonl"))
+    # print("[eval after]", post)
 
 if __name__ == "__main__":
     main()

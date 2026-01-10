@@ -14,6 +14,10 @@ train:
   eval_steps: 0
   seed: 0
 
+dataset:
+  n_train: 128
+  n_eval: 64
+
 runtime:
   use_wandb: true
   mps_fallback: false
