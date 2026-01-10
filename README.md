@@ -20,26 +20,37 @@ The code is structured so you can quickly modify rewards, datasets, models, and 
   - Loads model/tokenizer
   - Builds GSM8K train/eval datasets
   - Constructs the GRPO trainer and reward function
-  - Runs pre/post evaluation and saves outputs
+  - Supports YAML config files via `--config` flag or environment variables
+  - Saves model checkpoints and rollout logs
 - **`src/rewards.py`**
   - Utilities for parsing GSM8K answers
-  - Reward shaping for GSM8K-style numeric answers
+  - Extracts ground truth from GSM8K format (`#### <answer>`)
+  - Extracts model predictions from strict `Final: <number>` format
+  - Reward function: 1.0 for correct, 0.1 for wrong but correct format, 0.0 for missing format
+- **`src/rewards_logged.py`**
+  - Wraps the base reward function to log all rollouts to JSONL
+  - Records prompt, completion, prediction, ground truth, reward, and correctness
+- **`src/rollout_logger.py`**
+  - `RolloutRecorder`: Writes rollout records to `rollouts.jsonl`
+  - `StepTrackerCallback`: Keeps rollout step counter in sync with trainer's global_step
 - **`src/eval.py`**
   - Deterministic (or sampled) evaluation loop on GSM8K
   - Computes accuracy and average generation length
   - Optionally logs per-example results to JSONL
 - **`configs/local_debug.yaml`**
-  - Example “tiny” config for Mac / CPU / MPS debugging
-  - Mirrors defaults hard-coded in `train_grpo.py`
-- **`configs/box.yaml`**
-  - Example higher-budget config targeting a GPU box (e.g., AWS)
+  - Example config for Mac / CPU / MPS debugging
+  - Includes model, dataset, training, and runtime settings
+- **`configs/aws_config.yaml`**
+  - Example config targeting a GPU box (e.g., AWS)
+  - Similar structure to `local_debug.yaml` with GPU-optimized settings
 - **`scripts/setup_local.sh`**
   - Convenience script to create a conda env and install dependencies on macOS (Apple Silicon) with CPU/MPS PyTorch
 - **`scripts/run_train.sh`**
-  - Simple wrapper around `python -m src.train_grpo` (config flag is currently unused; environment variables control behavior)
-- **`outputs/`**
-  - Example outputs from a debug GRPO run (`outputs/debug_grpo/`)
-  - Includes final model checkpoint, tokenizer artifacts, and evaluation samples
+  - Wrapper around `python -m src.train_grpo --config <path>`
+  - Defaults to `configs/local_debug.yaml` if no argument provided
+- **`scripts/plot_prompt_accuracy.py`**
+  - Utility to plot accuracy over training steps for a specific prompt
+  - Reads from `rollouts.jsonl` and generates accuracy vs step plots
 
 ---
 
@@ -47,15 +58,14 @@ The code is structured so you can quickly modify rewards, datasets, models, and 
 
 The **training loop** in `src/train_grpo.py` works as follows:
 
-1. **Configuration via environment variables**
-   - `MODEL_NAME` (default: `Qwen/Qwen2.5-0.5B-Instruct`)
-   - `OUTPUT_DIR` (default: `outputs/debug_grpo`)
-   - `MAX_STEPS`, `MAX_NEW_TOKENS`, `NUM_GENERATIONS` (K), `BATCH_SIZE`, `GRAD_ACCUM`, `LR`
-   - `N_TRAIN`, `N_EVAL`, `EVAL_EVERY` (currently unused, eval is pre and post only)
-   - `SEED`
+1. **Configuration**
+   - Supports YAML config files via `--config` flag (e.g., `configs/local_debug.yaml`)
+   - Environment variables override YAML values (e.g., `MODEL_NAME`, `OUTPUT_DIR`, `MAX_STEPS`)
+   - Defaults: `Qwen/Qwen2.5-0.5B-Instruct`, `outputs/debug_grpo`, `MAX_STEPS=10`, etc.
+   - Config structure: `model_name`, `max_new_tokens`, `num_generations`, `train.*`, `dataset.*`, `runtime.*`
 2. **Device + seeding**
    - Uses CUDA if available, otherwise MPS on Apple Silicon, otherwise CPU
-   - On MPS, enables `PYTORCH_ENABLE_MPS_FALLBACK=1` to avoid unsupported ops crashes
+   - On MPS, enables `PYTORCH_ENABLE_MPS_FALLBACK=1` by default (configurable via `runtime.mps_fallback`)
 3. **Model & tokenizer**
    - Loads a causal LM (`AutoModelForCausalLM`) and tokenizer (`AutoTokenizer`)
    - Sets `pad_token` to `eos_token` if missing
@@ -63,41 +73,41 @@ The **training loop** in `src/train_grpo.py` works as follows:
 4. **Data & prompts**
    - Loads **GSM8K** train/test splits via `datasets`
    - For each example:
-     - Builds a chat-style prompt:
-       - System: “You are a helpful assistant. Solve the problem. Give reasoning, then the final answer.”
+     - Builds a chat-style prompt using the tokenizer's chat template:
+       - System: "You are a helpful assistant. Solve the problem.\nShow your reasoning briefly.\nAt the end, output exactly one line in this format:\nFinal: <number>\nDo not write anything after the Final line."
        - User: GSM8K question
-       - Assistant: fixed prefix “Let’s think step by step.”
-     - Extracts the canonical GSM8K final answer (see reward section)
-5. **Reward function**
+     - Extracts the canonical GSM8K final answer from the `#### <answer>` format
+5. **Reward function & logging**
    - Constructs a dict `prompt_to_gt: prompt -> final_answer`
-   - Wraps this into a TRL-compatible reward function:
-     - Signature: `reward_fn(prompts: List[str], completions: List[str], **kwargs) -> List[float]`
-     - Computes a scalar reward per completion (details below)
+   - Creates a `RolloutRecorder` that writes to `{output_dir}/rollouts/rollouts.jsonl`
+   - Wraps the base reward function with `make_logged_reward_fn` to log all rollouts:
+     - Each rollout record includes: step, prompt_id (hash), prompt, completion, prediction, ground_truth, reward, correct
+   - The reward function signature: `reward_fn(prompts: List[str], completions: List[str], **kwargs) -> List[float]`
 6. **GRPO configuration**
    - Creates `GRPOConfig` with:
      - `output_dir`, `learning_rate`, `per_device_train_batch_size`, `gradient_accumulation_steps`, `max_steps`, `seed`
      - **Generation-specific settings**:
-       - `generation_batch_size = NUM_GENERATIONS`
-       - `max_completion_length = MAX_NEW_TOKENS`
-       - `num_generations = NUM_GENERATIONS` (K rollouts per prompt)
+       - `generation_batch_size = batch_size * num_generations`
+       - `max_completion_length = max_new_tokens`
+       - `num_generations = num_generations` (K rollouts per prompt)
      - Logging:
-       - `logging_steps = 1`
-       - `save_steps = 0 if max_steps <= 50 else 50`
-       - `report_to="wandb"` and `run_name` from environment
+       - `logging_steps` (from config, default 1)
+       - `save_steps` (from config, default 0)
+       - `report_to="wandb"` if `runtime.use_wandb` is true, else `"none"`
+       - `run_name` auto-generated from model name, K, and steps
 7. **Trainer + callbacks**
    - Instantiates `GRPOTrainer` with:
      - `model`, `args=grpo_args`, `train_dataset=train_ds`
      - `processing_class=tokenizer`
-     - `reward_funcs=reward_fn`
-     - `callbacks=[WandbForceHistoryCallback()]`
-   - `WandbForceHistoryCallback` ensures W&B logs use `_step = trainer.global_step` for clean histories.
-8. **Pre/post evaluation**
-   - Runs `evaluate` **before** RL training on a held-out GSM8K eval subset
+     - `reward_funcs=reward_fn` (the logged reward function)
+     - `callbacks=[StepTrackerCallback(recorder)]`
+   - `StepTrackerCallback` keeps `recorder.step` in sync with `trainer.global_step` for accurate rollout logging
+8. **Training & saving**
    - Runs `trainer.train()`
-   - Saves the final model to `OUTPUT_DIR`
-   - Runs `evaluate` **after** training and optionally writes `eval_samples.jsonl`
+   - Saves the final model and tokenizer to `output_dir`
+   - Note: Evaluation calls are currently commented out in the code
 
-This gives a compact **end-to-end RL pipeline**: prompts → rollouts → rewards → GRPO updates → eval → saved model + logs.
+This gives a compact **end-to-end RL pipeline**: prompts → rollouts → rewards → GRPO updates → saved model + rollout logs.
 
 ---
 
@@ -111,7 +121,6 @@ The most direct way to get started on a Mac is to use the provided setup script:
 2. From the project root:
 
 ```bash
-cd /Users/bfan/Projects/simple_grpo  # adjust as needed
 chmod +x scripts/setup_local.sh
 ./scripts/setup_local.sh
 ```
@@ -120,7 +129,7 @@ What this does:
 - Creates/uses a conda env named `rl-local` with Python 3.10
 - Installs CPU/MPS versions of:
   - `torch`, `transformers`, `datasets`, `accelerate`, `trl`, `peft`
-  - `sentencepiece`, `wandb`, `evaluate`, `numpy`, `scipy`, `packaging`, `rich`
+  - `sentencepiece`, `wandb`, `evaluate`, `numpy`, `scipy`, `packaging`, `rich`, `matplotlib`
 - Runs a small sanity check to print Torch version and CUDA/MPS availability
 
 Alternatively, if you already have an environment:
@@ -150,7 +159,7 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 ```
 
-5. Use `configs/box.yaml` as a reference for reasonable hyperparameters on GPU (see “Running a debug training job” below).
+5. Use `configs/aws_config.yaml` as a reference for reasonable hyperparameters on GPU (see "Running a debug training job" below).
 
 ---
 
@@ -158,22 +167,29 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 
 The intended first step is a **small, fast GRPO run** on GSM8K to verify everything is wired correctly.
 
-### Minimal local debug run (defaults)
+### Minimal local debug run (using config file)
 
 From the project root, after activating your environment:
 
 ```bash
-python -m src.train_grpo
+python -m src.train_grpo --config configs/local_debug.yaml
 ```
 
-By default this will:
-- Use `Qwen/Qwen2.5-0.5B-Instruct`
-- Train for `MAX_STEPS=10`
-- Use `NUM_GENERATIONS=2` rollouts per prompt
-- Generate up to `MAX_NEW_TOKENS=96` per completion
-- Use `OUTPUT_DIR=outputs/debug_grpo`
+Or use the convenience script:
 
-You can customize via environment variables, e.g.:
+```bash
+./scripts/run_train.sh configs/local_debug.yaml
+```
+
+The config file specifies:
+- Model: `Qwen/Qwen2.5-0.5B-Instruct`
+- Training steps, batch size, learning rate, etc.
+- Dataset sizes (`n_train`, `n_eval`)
+- Runtime settings (W&B, MPS fallback)
+
+### Using environment variables
+
+You can override config values or run without a config file using environment variables:
 
 ```bash
 export MODEL_NAME=Qwen/Qwen2.5-1.5B-Instruct
@@ -192,14 +208,11 @@ python -m src.train_grpo
 
 The script will:
 - Print device/model info
-- Run an **eval-before-training** on a subset of GSM8K test
 - Run GRPO training
-- Run an **eval-after-training**
 - Save the final model and tokenizer to `OUTPUT_DIR`
+- Write rollout logs to `{OUTPUT_DIR}/rollouts/rollouts.jsonl`
 
-### Using example configs
-
-`configs/local_debug.yaml` and `configs/box.yaml` are provided as **reference configs**. The current training script primarily reads configuration from **environment variables**, so the YAML files are best thought of as documented presets you can manually mirror via `export` lines (or extend the script to parse `--config`).
+Note: Evaluation calls are currently commented out in the code, but you can uncomment them in `train_grpo.py` if needed.
 
 ---
 
@@ -214,29 +227,31 @@ All reward logic lives in `src/rewards.py`.
   - `train_grpo.py` stores this as `answer_final`.
 
 - **Model answer extraction**
-  - `extract_model_final(text)`:
-    - Strips commas, finds all number-like tokens (`-?\d+\.?\d*`)
-    - Returns the **last** one as the model’s predicted answer.
+  - The system prompt instructs the model to output: `Final: <number>` as the last line
+  - `extract_model_final(text)` uses a strict regex that:
+    - Only matches if `Final: <number>` appears at the very end of the completion
+    - Strips commas and whitespace
+    - Returns the number if the format is correct, `None` otherwise
+  - This enforces a structured output format rather than extracting arbitrary numbers.
 
 - **Current reward function (used by GRPO)**
-  - `make_reward_fn(prompt_to_gt)` builds a function:
-
+  - `make_reward_fn(prompt_to_gt)` builds a function that:
     - For each `(prompt, completion)`:
       - Looks up the ground-truth final answer from `prompt_to_gt[prompt]`
-      - Extracts the model’s final numeric answer from `completion`
-      - If `pred == gt`:
-        - Base reward = `1.0`
-      - If the completion contains **any digit** at all:
-        - Adds a small shaping bonus `+0.05`
-      - Clamps reward to \([0, 1]\)
+      - Extracts the model's final answer using `extract_model_final(completion)`
+      - Normalizes both numbers (converts to float/int string representation)
+      - Reward logic:
+        - `1.0` if `pred == gt` (correct format AND correct answer)
+        - `0.1` if format is correct but answer is wrong
+        - `0.0` if `Final: <number>` format is missing or malformed
 
-  - Result: a **sparse-but-binary** correctness reward with a tiny shaping term encouraging number-like outputs.
+  - Result: a **format-enforcing reward** that strongly penalizes missing the required output structure.
 
-- **Alternative component API**
-  - `compute_reward_components` / `combine_components` are included as a more modular interface:
-    - Components: `"exact"`, `"shaping"`, `"pred_none"` etc.
-    - `combine_components` currently just adds `"exact" + "shaping"` and clamps.
-  - The GRPO trainer currently uses the simpler `make_reward_fn` path, but these helpers are intended to make it easy to experiment with more nuanced rewards.
+- **Reward logging**
+  - `make_logged_reward_fn` (in `src/rewards_logged.py`) wraps the base reward function
+  - Logs every rollout to `{output_dir}/rollouts/rollouts.jsonl` with:
+    - Step number, prompt hash, full prompt/completion, prediction, ground truth, reward, correctness flag
+  - This enables post-hoc analysis of how rewards evolve during training
 
 This design is intentionally simple so you can **modify it freely**:
 - Add partial credit (e.g., close numeric distance)
@@ -254,7 +269,7 @@ Evaluation logic is implemented in `src/eval.py`:
 
 - **Dataset expectations**
   - Each example should contain:
-    - `prompt`: the full input prompt (system + user + assistant prefix)
+    - `prompt`: the full input prompt (system + user, formatted via chat template)
     - `answer_final` (optional, but needed for accuracy)
 
 - **Generation**
@@ -265,7 +280,7 @@ Evaluation logic is implemented in `src/eval.py`:
   - Decodes only the **newly generated part** as the completion.
 
 - **Metrics**
-  - Extracts the final numeric answer from the completion (same logic as rewards).
+  - Extracts the final numeric answer from the completion using `extract_model_final` (same logic as rewards).
   - Computes:
     - `eval_accuracy`: fraction of examples where `pred == gt`
     - `eval_avg_new_tokens`: average number of generated tokens
@@ -274,9 +289,7 @@ Evaluation logic is implemented in `src/eval.py`:
   - If `out_path` is provided, writes one JSON line per example with:
     - `prompt`, `gt`, `pred`, `completion`, `correct`
 
-`train_grpo.py` calls `evaluate`:
-- Once **before** training (sanity check baseline)
-- Once **after** training (with `out_path=OUTPUT_DIR/eval_samples.jsonl`), enabling deeper inspection of improvements.
+**Note**: In `train_grpo.py`, the evaluation calls are currently commented out. You can uncomment them to run evaluation before and after training if needed.
 
 ---
 
@@ -284,37 +297,39 @@ Evaluation logic is implemented in `src/eval.py`:
 
 Logging is designed to be minimal but sufficient for small experiments.
 
-- **Environment configuration**
-  - In `train_grpo.py`, the script sets:
-
-    - `WANDB_PROJECT = "simple_grpo"`
-    - `WANDB_RUN_GROUP = "local_debug"`
-    - `WANDB_NAME = f"grpo_{model_name}_K{num_generations}_steps{max_steps}"`
-
+- **Configuration**
+  - W&B is controlled via the config file: `runtime.use_wandb` (default: `false` in code, `true` in example configs)
+  - If enabled, the script sets:
+    - `WANDB_PROJECT = "simple_grpo"` (can be overridden via environment variable)
+  - The run name is auto-generated: `grpo_{model_name}_K{num_generations}_steps{max_steps}`
   - You can override these via environment variables **before** launching:
 
     ```bash
     export WANDB_PROJECT=my-rl-project
     export WANDB_RUN_GROUP=exp1
     export WANDB_NAME=grpo_qwen2_0p5b_debug
-    python -m src.train_grpo
+    python -m src.train_grpo --config configs/local_debug.yaml
     ```
 
 - **Integration with TRL**
-  - `GRPOConfig(report_to="wandb")` enables W&B logging.
-  - A custom callback `WandbForceHistoryCallback`:
-    - Intercepts `on_log` events
-    - Re-logs with `_step = trainer_state.global_step`
-    - Ensures step-aligned plots in the W&B UI (no weird gaps or off-by-one indices).
+  - `GRPOConfig(report_to="wandb" if use_wandb else "none")` enables/disables W&B logging.
+  - Standard Trainer / GRPO metrics are logged automatically (losses, learning rate, etc.)
 
-- **What you can expect to see**
-  - Standard Trainer / GRPO metrics (losses, learning rate, etc.)
-  - Global step-based x-axis
-  - You can add your own custom logging (e.g., average reward, accuracy on a small validation subset) via additional callbacks.
+- **Rollout logging**
+  - All rollouts are logged to `{output_dir}/rollouts/rollouts.jsonl` regardless of W&B settings
+  - Use `scripts/plot_prompt_accuracy.py` to visualize accuracy over time for specific prompts:
+    ```bash
+    python scripts/plot_prompt_accuracy.py \
+      --rollouts outputs/local_debug/rollouts/rollouts.jsonl \
+      --prompt_id <hash> \
+      --num_generations 8 \
+      --out outputs/local_debug/rollouts/plots/<prompt_id>.png
+    ```
 
 To use W&B:
 - Make sure `wandb` is installed.
 - Run `wandb login` once on the machine.
+- Set `runtime.use_wandb: true` in your config file.
 
 ---
 

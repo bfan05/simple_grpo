@@ -177,9 +177,9 @@ def main():
     trainer.add_callback(StepTrackerCallback(recorder))
 
     # run a quick eval before training
-    # pre = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-    #                out_path=os.path.join(output_dir, "eval_samples_before.jsonl"))
-    # print("[eval before]", pre)
+    pre = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
+                   out_path=os.path.join(output_dir, "eval_samples_before.jsonl"))
+    print("[eval before]", pre)
 
     trainer.train()
 
@@ -187,9 +187,9 @@ def main():
     trainer.save_model(output_dir)
 
     # eval after training
-    # post = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-    #                 out_path=os.path.join(output_dir, "eval_samples_after.jsonl"))
-    # print("[eval after]", post)
+    post = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
+                    out_path=os.path.join(output_dir, "eval_samples_after.jsonl"))
+    print("[eval after]", post)
 
 if __name__ == "__main__":
     main()
