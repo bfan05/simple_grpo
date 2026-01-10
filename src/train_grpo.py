@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from trl import GRPOTrainer, GRPOConfig
 
 from src.rewards import extract_gsm8k_gt, make_reward_fn
-from src.eval import evaluate
+from src.eval import evaluate, evaluate_batched
 from src.rollout_logger import RolloutRecorder, StepTrackerCallback
 from src.rewards_logged import make_logged_reward_fn
 
@@ -88,15 +88,27 @@ def main():
     dataset_cfg = cfg.get("dataset", {}) or {}
     runtime_cfg = cfg.get("runtime", {}) or {}
 
-    model_name = os.environ.get("MODEL_NAME", cfg.get("model_name", "Qwen/Qwen2.5-0.5B-Instruct"))
-    output_dir = os.environ.get("OUTPUT_DIR", train_cfg.get("output_dir", "outputs/debug_grpo"))
+    model_name = os.environ.get(
+        "MODEL_NAME", cfg.get("model_name", "Qwen/Qwen2.5-0.5B-Instruct")
+    )
+    output_dir = os.environ.get(
+        "OUTPUT_DIR", train_cfg.get("output_dir", "outputs/debug_grpo")
+    )
 
     max_steps = int(os.environ.get("MAX_STEPS", train_cfg.get("num_train_steps", 10)))
-    max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", cfg.get("max_new_tokens", 96)))
-    num_generations = int(os.environ.get("NUM_GENERATIONS", cfg.get("num_generations", 2)))
+    max_new_tokens = int(
+        os.environ.get("MAX_NEW_TOKENS", cfg.get("max_new_tokens", 96))
+    )
+    num_generations = int(
+        os.environ.get("NUM_GENERATIONS", cfg.get("num_generations", 2))
+    )
 
-    batch_size = int(os.environ.get("BATCH_SIZE", train_cfg.get("per_device_train_batch_size", 1)))
-    grad_accum = int(os.environ.get("GRAD_ACCUM", train_cfg.get("gradient_accumulation_steps", 1)))
+    batch_size = int(
+        os.environ.get("BATCH_SIZE", train_cfg.get("per_device_train_batch_size", 1))
+    )
+    grad_accum = int(
+        os.environ.get("GRAD_ACCUM", train_cfg.get("gradient_accumulation_steps", 1))
+    )
     lr = float(os.environ.get("LR", train_cfg.get("learning_rate", 5e-6)))
     seed = int(os.environ.get("SEED", train_cfg.get("seed", 0)))
 
@@ -105,6 +117,14 @@ def main():
 
     n_train = int(os.environ.get("N_TRAIN", dataset_cfg.get("n_train", 128)))
     n_eval = int(os.environ.get("N_EVAL", dataset_cfg.get("n_eval", 64)))
+    eval_batch_size = int(
+        os.environ.get("EVAL_BATCH_SIZE", dataset_cfg.get("eval_batch_size", 16))
+    )
+    eval_micro_batch_size = int(
+        os.environ.get(
+            "EVAL_MICRO_BATCH_SIZE", dataset_cfg.get("eval_micro_batch_size", 4)
+        )
+    )
 
     # Runtime toggles from YAML
     use_wandb = bool(runtime_cfg.get("use_wandb", False))
@@ -142,7 +162,7 @@ def main():
     eval_ds = load_gsm8k_eval(tokenizer=tokenizer, n=n_eval)
 
     prompt_to_gt = {ex["prompt"]: ex["answer_final"] for ex in train_ds}
-    
+
     rollout_dir = os.path.join(output_dir, "rollouts")
     recorder = RolloutRecorder(out_dir=rollout_dir)
 
@@ -177,8 +197,16 @@ def main():
     trainer.add_callback(StepTrackerCallback(recorder))
 
     # run a quick eval before training
-    pre = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-                   out_path=os.path.join(output_dir, "eval_samples_before.jsonl"))
+    pre = evaluate_batched(
+        model,
+        tokenizer,
+        eval_ds,
+        max_new_tokens,
+        temperature=0.0,
+        out_path=os.path.join(output_dir, "eval_samples_before.jsonl"),
+        batch_size=eval_batch_size,
+        micro_batch_size=eval_micro_batch_size,
+    )
     print("[eval before]", pre)
 
     trainer.train()
@@ -187,8 +215,16 @@ def main():
     trainer.save_model(output_dir)
 
     # eval after training
-    post = evaluate(model, tokenizer, eval_ds, max_new_tokens, temperature=0.0,
-                    out_path=os.path.join(output_dir, "eval_samples_after.jsonl"))
+    post = evaluate_batched(
+        model,
+        tokenizer,
+        eval_ds,
+        max_new_tokens,
+        temperature=0.0,
+        out_path=os.path.join(output_dir, "eval_samples_after.jsonl"),
+        batch_size=eval_batch_size,
+        micro_batch_size=eval_micro_batch_size,
+    )
     print("[eval after]", post)
 
 if __name__ == "__main__":

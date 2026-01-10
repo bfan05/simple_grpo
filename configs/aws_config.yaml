@@ -15,8 +15,10 @@ train:
   seed: 0
 
 dataset:
-  n_train: 32
-  n_eval: 16
+  n_train: 128
+  n_eval: 64
+  eval_batch_size: 16
+  eval_micro_batch_size: 8
 
 runtime:
   use_wandb: true
