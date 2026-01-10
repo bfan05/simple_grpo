@@ -121,7 +121,7 @@ EOF
 echo "[7/9] Installing Hugging Face + TRL stack..."
 pip install --upgrade \
   transformers datasets accelerate trl peft bitsandbytes sentencepiece \
-  wandb evaluate numpy scipy packaging rich
+  wandb evaluate numpy scipy packaging rich matplotlib
 
 # -----------------------------
 # Optional: FlashAttention (best-effort)

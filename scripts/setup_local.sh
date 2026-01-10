@@ -32,7 +32,7 @@ pip install --upgrade \
   torch \
   transformers datasets accelerate trl peft \
   sentencepiece \
-  wandb evaluate numpy scipy packaging rich
+  wandb evaluate numpy scipy packaging rich matplotlib
 
 echo "------------------------------"
 echo "Sanity checks:"
