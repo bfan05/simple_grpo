@@ -149,11 +149,11 @@ def main():
 
     # For CUDA, let HF place weights; for Mac/CPU just load normally.
     if device == "cuda":
+        torch.cuda.set_device(0)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             dtype=torch.bfloat16,
-            device_map="auto",
-        )
+        ).to("cuda")
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name)
         model.to(device)
