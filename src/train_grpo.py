@@ -12,6 +12,7 @@ from src.rewards import extract_gsm8k_gt, make_reward_fn
 from src.eval import evaluate, evaluate_batched
 from src.rollout_logger import RolloutRecorder, StepTrackerCallback
 from src.rewards_logged import make_logged_reward_fn
+from src.wandb_prompt_tracker import PromptAccuracyTracker
 
 import argparse
 import yaml
@@ -195,6 +196,10 @@ def main():
     )
 
     trainer.add_callback(StepTrackerCallback(recorder))
+    
+    # Add wandb prompt accuracy tracker if wandb is enabled
+    if use_wandb:
+        trainer.add_callback(PromptAccuracyTracker(recorder, log_table_every_n_steps=1))
 
     # run a quick eval before training
     pre = evaluate_batched(
