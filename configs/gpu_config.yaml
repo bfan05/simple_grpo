@@ -23,3 +23,6 @@ dataset:
 runtime:
   use_wandb: true
   mps_fallback: false
+  rollout_viz:
+    run_standalone: true
+    standalone_port: 5000

@@ -12,12 +12,16 @@ from src.rewards import extract_gsm8k_gt, make_reward_fn
 from src.eval import evaluate, evaluate_batched
 from src.rollout_logger import RolloutRecorder, StepTrackerCallback
 from src.rewards_logged import make_logged_reward_fn
-from src.wandb_prompt_tracker import PromptAccuracyTracker
+
+try:
+    import rollout_viz
+except ImportError:
+    rollout_viz = None
 
 import argparse
 import yaml
 
-def load_yaml_config(path: str) -> dict:
+def load_yaml_config(path: str) -> dict: 
     with open(path, "r") as f:
         cfg = yaml.safe_load(f)
     return cfg or {}
@@ -130,6 +134,13 @@ def main():
     # Runtime toggles from YAML
     use_wandb = bool(runtime_cfg.get("use_wandb", False))
     mps_fallback = bool(runtime_cfg.get("mps_fallback", True))
+    rollout_viz_cfg = runtime_cfg.get("rollout_viz", {}) or {}
+    rollout_viz_run_standalone = bool(rollout_viz_cfg.get("run_standalone", False))
+    rollout_viz_port = int(
+        os.environ.get(
+            "ROLLOUT_VIZ_PORT", rollout_viz_cfg.get("standalone_port", 5000)
+        )
+    )
 
     if use_wandb:
         os.environ.setdefault("WANDB_PROJECT", "simple_grpo")
@@ -150,7 +161,7 @@ def main():
 
     # For CUDA, let HF place weights; for Mac/CPU just load normally.
     if device == "cuda":
-        torch.cuda.set_device(0)
+        torch.cuda.set_device(1)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             dtype=torch.bfloat16,
@@ -165,7 +176,26 @@ def main():
     prompt_to_gt = {ex["prompt"]: ex["answer_final"] for ex in train_ds}
 
     rollout_dir = os.path.join(output_dir, "rollouts")
+
+    # Clear any existing rollout logs so the rollout_viz UI starts from a clean slate
+    # for this training run (prevents old runs from appearing as "preloaded" data).
+    if os.path.isdir(rollout_dir):
+        for name in os.listdir(rollout_dir):
+            if name.endswith(".jsonl"):
+                try:
+                    os.remove(os.path.join(rollout_dir, name))
+                except OSError:
+                    pass
+
     recorder = RolloutRecorder(out_dir=rollout_dir)
+
+    if rollout_viz is not None:
+        rollout_viz.init(
+            use_wandb=use_wandb,
+            data_dir=rollout_dir,
+            standalone_port=rollout_viz_port,
+            run_standalone=rollout_viz_run_standalone,
+        )
 
     reward_fn = make_logged_reward_fn(prompt_to_gt, recorder)
 
@@ -196,10 +226,6 @@ def main():
     )
 
     trainer.add_callback(StepTrackerCallback(recorder))
-    
-    # Add wandb prompt accuracy tracker if wandb is enabled
-    if use_wandb:
-        trainer.add_callback(PromptAccuracyTracker(recorder, log_table_every_n_steps=1))
 
     # run a quick eval before training
     pre = evaluate_batched(
@@ -215,6 +241,9 @@ def main():
     print("[eval before]", pre)
 
     trainer.train()
+
+    if rollout_viz is not None and use_wandb:
+        rollout_viz.flush_wandb()
 
     # Save model
     trainer.save_model(output_dir)

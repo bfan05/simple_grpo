@@ -48,9 +48,6 @@ The code is structured so you can quickly modify rewards, datasets, models, and 
 - **`scripts/run_train.sh`**
   - Wrapper around `python -m src.train_grpo --config <path>`
   - Defaults to `configs/local_debug.yaml` if no argument provided
-- **`scripts/plot_prompt_accuracy.py`**
-  - Utility to plot accuracy over training steps for a specific prompt
-  - Reads from `rollouts.jsonl` and generates accuracy vs step plots
 
 ---
 
@@ -130,6 +127,7 @@ What this does:
 - Installs CPU/MPS versions of:
   - `torch`, `transformers`, `datasets`, `accelerate`, `trl`, `peft`
   - `sentencepiece`, `wandb`, `evaluate`, `numpy`, `scipy`, `packaging`, `rich`, `matplotlib`
+  - `rollout-viz` (from [rollout_viz](https://github.com/bfan05/rollout_viz)) for rollout visualization and wandb integration
 - Runs a small sanity check to print Torch version and CUDA/MPS availability
 
 Alternatively, if you already have an environment:
@@ -315,16 +313,12 @@ Logging is designed to be minimal but sufficient for small experiments.
   - `GRPOConfig(report_to="wandb" if use_wandb else "none")` enables/disables W&B logging.
   - Standard Trainer / GRPO metrics are logged automatically (losses, learning rate, etc.)
 
-- **Rollout logging**
-  - All rollouts are logged to `{output_dir}/rollouts/rollouts.jsonl` regardless of W&B settings
-  - Use `scripts/plot_prompt_accuracy.py` to visualize accuracy over time for specific prompts:
-    ```bash
-    python scripts/plot_prompt_accuracy.py \
-      --rollouts outputs/local_debug/rollouts/rollouts.jsonl \
-      --prompt_id <hash> \
-      --num_generations 8 \
-      --out outputs/local_debug/rollouts/plots/<prompt_id>.png
-    ```
+- **Rollout logging and visualization**
+  - When the `rollout-viz` package is installed, rollouts are sent to [rollout_viz](https://github.com/bfan05/rollout_viz), which:
+    - Writes step-wise JSONL files under `{output_dir}/rollouts/` and keeps an in-memory buffer for the live UI.
+    - Logs overall accuracy to wandb as `rollout/accuracy` and periodically logs an interactive HTML dashboard (`question_accuracy_interactive`) with per-question accuracy curves and rollout viewer.
+  - Without `rollout-viz`, rollouts are written only to `{output_dir}/rollouts/rollouts.jsonl` (no wandb rollout viz).
+  - Optional: enable the live webpage by setting `runtime.rollout_viz.run_standalone: true` in your config, or run the server manually: `rollout-viz --data-dir ./outputs/gpu/rollouts --port 5000`, then open http://localhost:5000.
 
 To use W&B:
 - Make sure `wandb` is installed.

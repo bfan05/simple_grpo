@@ -7,6 +7,7 @@ peft
 sentencepiece
 wandb
 evaluate
+rollout-viz @ git+https://github.com/bfan05/rollout_viz.git
 numpy
 scipy
 packaging

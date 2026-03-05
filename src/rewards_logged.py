@@ -9,6 +9,11 @@ from .rewards import (
 )
 from .rollout_logger import RolloutRecorder
 
+try:
+    import rollout_viz
+except ImportError:
+    rollout_viz = None
+
 def prompt_hash(prompt: str, n: int = 12) -> str:
     return hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:n]
 
@@ -50,7 +55,7 @@ def make_logged_reward_fn(
             # Use question hash as question_id if we extracted a question, otherwise use prompt_id
             question_id = prompt_hash(question) if question else prompt_hash(p)
 
-            records.append({
+            record = {
                 "step": recorder.step,
                 "prompt_id": prompt_hash(p),
                 "question_id": question_id,
@@ -61,9 +66,12 @@ def make_logged_reward_fn(
                 "ground_truth": gt,
                 "reward": float(r),
                 "correct": (pred is not None and gt is not None and pred == gt),
-            })
-
-        recorder.write(records)
+            }
+            records.append(record)
+            if rollout_viz is not None:
+                rollout_viz.log_rollout(record)
+        if rollout_viz is None:
+            recorder.write(records)
         return rewards
 
     return reward_fn
